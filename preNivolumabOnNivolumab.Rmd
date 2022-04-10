@@ -1,0 +1,173 @@
+---
+title: "EDA, QC, and DESeq2 / edgeR analysis of 109 RNA-seq samples of immunotherapy treatment"
+author: "Michael Love"
+output: 
+  html_document:
+    self_contained: no
+---
+
+```{r}
+x <- read.csv("GSE91061_BMS038109Sample.hg19KnownGene.raw.csv.gz", row.names=1)
+condition <- factor(sub(".+_(.+)_.+", "\\1", colnames(x)))
+table(condition)
+```
+
+```{r pca1, message=FALSE, cache=TRUE}
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(x, 
+                              colData=data.frame(condition), 
+                              ~condition)
+vsd <- vst(dds, blind=FALSE)
+plotPCA(vsd)
+```
+
+```{r pcaForOutlier}
+rv <- rowVars(assay(vsd))
+pc <- prcomp(t(assay(vsd)[head(order(-rv),1000),]))
+plot(pc$x[,1:2], col=condition)
+idx <- pc$x[,1] < -25
+sum(idx)
+plot(pc$x[,1:2], col=idx+1, pch=20, asp=1)
+```
+
+```{r}
+condition <- condition[!idx]
+dds <- dds[,!idx]
+```
+
+For comparison, use minimal filtering with edgeR.
+
+```{r, message=FALSE}
+library(edgeR)
+y <- DGEList(counts=counts(dds), group=condition)
+keep <- filterByExpr(y)
+table(keep)
+y <- y[keep,]
+dds <- dds[keep,]
+```
+
+We can see there is still structure in the 2D PCA, which is not
+related to the known covariate `condition`.
+
+```{r pca2, cache=TRUE}
+vsd <- vst(dds, blind=FALSE)
+plotPCA(vsd)
+```
+
+Run simple DESeq2 analysis comparing the two groups, without 
+attempting to control for the technical variation:
+
+```{r deseq2-simple, cache=TRUE}
+system.time({
+  dds <- DESeq(dds, test="LRT", reduced=~1, fitType="glmGamPoi")
+})
+```
+
+```{r}
+res <- results(dds)
+table(res$padj < .1)
+```
+
+Ignoring the technical variation is not appropriate, if there is 
+correlation between the technical variation and the condition,
+not including variables in the design formula that control for the
+effect on the expression estimates will lead to invalid inference,
+regardless of the method we choose.
+
+We can estimate the technical variation with a number of methods, 
+including RUV, SVA, or PEER. Here we demonstrate usage of RUV:
+
+```{r, message=FALSE, cache=TRUE}
+library(RUVSeq)
+set <- newSeqExpressionSet(counts(dds))
+set <- betweenLaneNormalization(set, which="upper")
+not_sig <- rownames(res)[which(res$pvalue > .1)]
+empirical <- rownames(set)[ rownames(set) %in% not_sig ]
+set <- RUVg(set, empirical, k=5)
+```
+
+The factors of unwanted variation are labelled `W_1`, `W_2`, etc.
+and are stored as metadata. We add the original condition variable:
+
+```{r}
+pdat <- pData(set)
+pdat$condition <- condition
+```
+
+We can visualize how the factors of unwanted variation describe
+the samples in the PC1 and PC2 space:
+
+```{r pca3}
+vsd$W1 <- pdat$W_1
+vsd$W2 <- pdat$W_2
+plotPCA(vsd, intgroup="W1")
+plotPCA(vsd, intgroup="W2")
+```
+
+Adding the factors to the design, and performing a LRT. Here we use
+`glmGamPoi` which is an efficient method for estimating dispersion
+when we have many samples.
+
+```{r}
+colData(dds) <- cbind(colData(dds), pdat[,1:5])
+design(dds) <- ~W_1 + W_2 + W_3 + W_4 + W_5 + condition
+```
+
+```{r deseq2-controlling, cache=TRUE}
+system.time({
+  dds <- DESeq(dds, test="LRT", reduced=~W_1 + W_2 + W_3 + W_4 + W_5, 
+               fitType="glmGamPoi")
+})
+```
+
+Controlling for technical variation in this case reduces the number
+of DE genes. It could also be the opposite, that controlling for
+technical variation increased the apparent number of DE genes.
+That the number is reduced here indicates that some of the previous
+results were likely due to confounding of technical variation with
+the condition variable. Ignoring that confounding, again, will result
+in invalid inference for all methods.
+
+```{r}
+res <- results(dds)
+table(res$padj < .1)
+```
+
+```{r}
+res_sig <- res[which(res$padj < .1),]
+```
+
+```{r maplot}
+plotMA(res, ylim=c(-5,5))
+```
+
+```{r edger, cache=TRUE}
+y <- calcNormFactors(y)
+design <- model.matrix(~W_1 + W_2 + W_3 + W_4 + W_5 + condition, data=pdat)
+y <- estimateDisp(y, design)
+qlfit <- glmQLFit(y, design)
+qlft <- glmQLFTest(qlfit)
+```
+
+```{r}
+tt <- topTags(qlft, n=nrow(y))[[1]]
+sum(tt$FDR < .1)
+```
+
+```{r edgerDESeq2Compare}
+hist(tt$F, freq=FALSE)
+F <- tt[rownames(res_sig),"F"]
+lines(density(F[!is.na(F)]))
+```
+
+```{r}
+match(rownames(res_sig), rownames(tt))
+```
+
+```{r}
+table(rownames(res_sig) %in% head(rownames(tt), 20))
+```
+
+```{r}
+sessionInfo()
+```
