@@ -178,6 +178,7 @@ table(condition)</code></pre>
 <pre><code>## condition
 ##  On Pre 
 ##  58  51</code></pre>
+<p>Always look at your data with a PCA plot before any hypothesis testing. Here we see there are some extreme outliers that should be removed. Perhaps these are failed samples, or otherwise very different than the other 100 samples. Outliers like this deserve further investigation with those who generated the libraries (to avoid the problem re-occuring), but we know they will impair inference on the condition effect, so we remove them at the beginning.</p>
 <pre class="r"><code>library(DESeq2)
 dds &lt;- DESeqDataSetFromMatrix(x, 
                               colData=data.frame(condition), 
@@ -185,6 +186,7 @@ dds &lt;- DESeqDataSetFromMatrix(x,
 vsd &lt;- vst(dds, blind=FALSE)
 plotPCA(vsd)</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/pca1-1.png" width="672" /></p>
+<p>We can remove them via PC1:</p>
 <pre class="r"><code>rv &lt;- rowVars(assay(vsd))
 pc &lt;- prcomp(t(assay(vsd)[head(order(-rv),1000),]))
 plot(pc$x[,1:2], col=condition)</code></pre>
@@ -196,7 +198,7 @@ sum(idx)</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/pcaForOutlier-2.png" width="672" /></p>
 <pre class="r"><code>condition &lt;- condition[!idx]
 dds &lt;- dds[,!idx]</code></pre>
-<p>For comparison, use minimal filtering with edgeR.</p>
+<p>For comparison below, we start with minimal filtering with edgeR. This basically removes genes with very low counts across most samples.</p>
 <pre class="r"><code>library(edgeR)
 y &lt;- DGEList(counts=counts(dds), group=condition)
 keep &lt;- filterByExpr(y)
@@ -206,11 +208,12 @@ table(keep)</code></pre>
 ##  5956 16231</code></pre>
 <pre class="r"><code>y &lt;- y[keep,]
 dds &lt;- dds[keep,]</code></pre>
-<p>We can see there is still structure in the 2D PCA, which is not related to the known covariate <code>condition</code>.</p>
+<p>We can see there is still structure in the 2D PCA, which is not related to the known covariate <code>condition</code>. This must be modeled or else we will have spurious results.</p>
 <pre class="r"><code>vsd &lt;- vst(dds, blind=FALSE)
 plotPCA(vsd)</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/pca2-1.png" width="672" /></p>
-<p>Run simple DESeq2 analysis comparing the two groups, without attempting to control for the technical variation:</p>
+<p>First we see what happens when we run simple DESeq2 analysis comparing the two groups, without attempting to control for the technical variation. Here we use <code>glmGamPoi</code> which is an efficient method for estimating dispersion when we have many samples. This can speed up the analysis by an order of magnitude. For details, see:</p>
+<p><a href="https://doi.org/10.1093/bioinformatics/btaa1009" class="uri">https://doi.org/10.1093/bioinformatics/btaa1009</a></p>
 <pre class="r"><code>system.time({
   dds &lt;- DESeq(dds, test=&quot;LRT&quot;, reduced=~1, fitType=&quot;glmGamPoi&quot;)
 })</code></pre>
@@ -229,13 +232,16 @@ plotPCA(vsd)</code></pre>
 <pre><code>## Prepare results</code></pre>
 <pre><code>##    user  system elapsed 
 ##  11.694   1.730  14.602</code></pre>
+<p>There are hundreds of DE genes. As we will see, these are the result of uncontrolled confounding.</p>
 <pre class="r"><code>res &lt;- results(dds)
 table(res$padj &lt; .1)</code></pre>
 <pre><code>## 
 ## FALSE  TRUE 
 ## 15392   839</code></pre>
-<p>Ignoring the technical variation is not appropriate, if there is correlation between the technical variation and the condition, not including variables in the design formula that control for the effect on the expression estimates will lead to invalid inference, regardless of the method we choose.</p>
-<p>We can estimate the technical variation with a number of methods, including RUV, SVA, or PEER. Here we demonstrate usage of RUV:</p>
+<p>Ignoring the technical variation is not appropriate, if there is correlation between the technical variation and the condition. Not including variables in the design formula that control for the effect on the expression estimates will lead to invalid inference, regardless of the method we choose.</p>
+<p>We can estimate the technical variation with a number of methods, including RUV, SVA, or PEER. Here we demonstrate usage of RUV. We will use the <code>RUVg</code> method that takes empirically defined negative control genes to estimate low rank technical variation in the data. We provide it with genes that had a large p-value in the naive analysis. We set <code>k=5</code> here for a first pass analysis, but some datasets may require larger values of <code>k</code>. An iterative strategy is recommended, including consideration of both postiive and negative control features.</p>
+<p>For details on the RUV-Seq method, see:</p>
+<p><a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/" class="uri">https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/</a></p>
 <pre class="r"><code>library(RUVSeq)
 set &lt;- newSeqExpressionSet(counts(dds))
 set &lt;- betweenLaneNormalization(set, which=&quot;upper&quot;)
@@ -252,7 +258,7 @@ plotPCA(vsd, intgroup=&quot;W1&quot;)</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/pca3-1.png" width="672" /></p>
 <pre class="r"><code>plotPCA(vsd, intgroup=&quot;W2&quot;)</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/pca3-2.png" width="672" /></p>
-<p>Adding the factors to the design, and performing a LRT. Here we use <code>glmGamPoi</code> which is an efficient method for estimating dispersion when we have many samples.</p>
+<p>Adding the factors to the design, and performing a LRT is fairly simple, first we show this with DESeq2:</p>
 <pre class="r"><code>colData(dds) &lt;- cbind(colData(dds), pdat[,1:5])
 design(dds) &lt;- ~W_1 + W_2 + W_3 + W_4 + W_5 + condition</code></pre>
 <pre class="r"><code>system.time({
@@ -275,7 +281,8 @@ design(dds) &lt;- ~W_1 + W_2 + W_3 + W_4 + W_5 + condition</code></pre>
 <pre><code>## Prepare results</code></pre>
 <pre><code>##    user  system elapsed 
 ##  23.558   2.016  27.222</code></pre>
-<p>Controlling for technical variation in this case reduces the number of DE genes. It could also be the opposite, that controlling for technical variation increased the apparent number of DE genes. That the number is reduced here indicates that some of the previous results were likely due to confounding of technical variation with the condition variable. Ignoring that confounding, again, will result in invalid inference for all methods.</p>
+<p>Controlling for technical variation in this case greatly reduces the number of DE genes. It could also be the opposite case, that controlling for technical variation increased the apparent number of DE genes.</p>
+<p>That the number is reduced here indicates that some of the previous results were likely due to confounding of technical variation with the condition variable. Ignoring that confounding, again, will result in invalid inference for all methods that look for shifts in the expression values.</p>
 <pre class="r"><code>res &lt;- results(dds)
 table(res$padj &lt; .1)</code></pre>
 <pre><code>## 
@@ -284,20 +291,29 @@ table(res$padj &lt; .1)</code></pre>
 <pre class="r"><code>res_sig &lt;- res[which(res$padj &lt; .1),]</code></pre>
 <pre class="r"><code>DESeq2::plotMA(res, ylim=c(-5,5))</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/maplot-1.png" width="672" /></p>
+<p>We repeat the analysis with the edgeR quasi-likelihood test. For details on this method see:</p>
+<ul>
+<li><a href="https://f1000research.com/articles/5-1438" class="uri">https://f1000research.com/articles/5-1438</a></li>
+<li><a href="http://www.statsci.org/smyth/pubs/QuasiSeqPreprint.pdf" class="uri">http://www.statsci.org/smyth/pubs/QuasiSeqPreprint.pdf</a></li>
+</ul>
 <pre class="r"><code>y &lt;- calcNormFactors(y)
 design &lt;- model.matrix(~W_1 + W_2 + W_3 + W_4 + W_5 + condition, data=pdat)
 y &lt;- estimateDisp(y, design)
 qlfit &lt;- glmQLFit(y, design)
 qlft &lt;- glmQLFTest(qlfit)</code></pre>
+<p>edgeR when controlling for the technical variation, has no DE genes:</p>
 <pre class="r"><code>tt &lt;- topTags(qlft, n=nrow(y))[[1]]
 sum(tt$FDR &lt; .1)</code></pre>
 <pre><code>## [1] 0</code></pre>
+<p>Where do the DESeq2 significant genes fall in terms of test statistic according to edgeR? This is mostly a check to make sure we can line up the two tables, etc.</p>
 <pre class="r"><code>hist(tt$F, freq=FALSE)
 F &lt;- tt[rownames(res_sig),&quot;F&quot;]
 lines(density(F[!is.na(F)]))</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/edgerDESeq2Compare-1.png" width="672" /></p>
+<p>The order of the DESeq2 significant genes according to edgeR. We can see they are all top ranked, so the methods agree in general on the ranking of the top 20 genes, but DESeq2 is giving these genes a lower p-value:</p>
 <pre class="r"><code>match(rownames(res_sig), rownames(tt))</code></pre>
 <pre><code>##  [1]  8 12  7  3  2 15 14 13  4  1 11 18  6 19  5 16  9 21 17</code></pre>
+<p>Another way to show that the methods are in agreement on the top genes:</p>
 <pre class="r"><code>table(rownames(res_sig) %in% head(rownames(tt), 20))</code></pre>
 <pre><code>## 
 ## FALSE  TRUE 
@@ -309,6 +325,14 @@ plot(-log10(tt[rownames(res_top500),&quot;PValue&quot;]),
      xlab=&quot;edgeR pvalue&quot;, ylab=&quot;DESeq2 pvalue&quot;)
 abline(0,1,col=&quot;red&quot;)</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/edgerDESeq2pvalues-1.png" width="672" /></p>
+<p>For more details on controlling for technical variation in RNA-seq experiments, see the following papers:</p>
+<ul>
+<li>RUVSeq - <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/" class="uri">https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/</a></li>
+<li>svaseq - <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4245966/" class="uri">https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4245966/</a></li>
+<li>PEER - <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3398141/" class="uri">https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3398141/</a></li>
+<li>’t Hoen (2013) - <a href="https://pubmed.ncbi.nlm.nih.gov/24037425/" class="uri">https://pubmed.ncbi.nlm.nih.gov/24037425/</a></li>
+<li>SEQC collection - <a href="https://www.nature.com/collections/wzcnyyrcsd" class="uri">https://www.nature.com/collections/wzcnyyrcsd</a></li>
+</ul>
 </div>
 <div id="session-info" class="section level1">
 <h1>Session info</h1>

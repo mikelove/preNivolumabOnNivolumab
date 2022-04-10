@@ -21,6 +21,14 @@ table(condition)
 ##  58  51
 ```
 
+Always look at your data with a PCA plot before any hypothesis testing.
+Here we see there are some extreme outliers that should be removed.
+Perhaps these are failed samples, or otherwise very different than
+the other 100 samples. Outliers like this deserve further investigation
+with those who generated the libraries (to avoid the problem re-occuring), 
+but we know they will impair inference on the condition effect, 
+so we remove them at the beginning.
+
 
 ```r
 library(DESeq2)
@@ -32,6 +40,8 @@ plotPCA(vsd)
 ```
 
 <img src="preNivolumabOnNivolumab_files/figure-html/pca1-1.png" width="672" />
+
+We can remove them via PC1:
 
 
 ```r
@@ -63,7 +73,8 @@ condition <- condition[!idx]
 dds <- dds[,!idx]
 ```
 
-For comparison, use minimal filtering with edgeR.
+For comparison below, we start with minimal filtering with edgeR.
+This basically removes genes with very low counts across most samples.
 
 
 ```r
@@ -85,7 +96,8 @@ dds <- dds[keep,]
 ```
 
 We can see there is still structure in the 2D PCA, which is not
-related to the known covariate `condition`.
+related to the known covariate `condition`. This must be modeled
+or else we will have spurious results.
 
 
 ```r
@@ -95,8 +107,13 @@ plotPCA(vsd)
 
 <img src="preNivolumabOnNivolumab_files/figure-html/pca2-1.png" width="672" />
 
-Run simple DESeq2 analysis comparing the two groups, without 
-attempting to control for the technical variation:
+First we see what happens when we run simple DESeq2 analysis comparing 
+the two groups, without attempting to control for the technical variation.
+Here we use `glmGamPoi` which is an efficient method for estimating 
+dispersion when we have many samples. This can speed up the analysis
+by an order of magnitude. For details, see: 
+
+<https://doi.org/10.1093/bioinformatics/btaa1009>
 
 
 ```r
@@ -153,6 +170,9 @@ system.time({
 ##  11.694   1.730  14.602
 ```
 
+There are hundreds of DE genes. As we will see, these are the result
+of uncontrolled confounding.
+
 
 ```r
 res <- results(dds)
@@ -166,13 +186,23 @@ table(res$padj < .1)
 ```
 
 Ignoring the technical variation is not appropriate, if there is 
-correlation between the technical variation and the condition,
-not including variables in the design formula that control for the
+correlation between the technical variation and the condition.
+Not including variables in the design formula that control for the
 effect on the expression estimates will lead to invalid inference,
 regardless of the method we choose.
 
 We can estimate the technical variation with a number of methods, 
-including RUV, SVA, or PEER. Here we demonstrate usage of RUV:
+including RUV, SVA, or PEER. Here we demonstrate usage of RUV. We will
+use the `RUVg` method that takes empirically defined negative control
+genes to estimate low rank technical variation in the data. We provide
+it with genes that had a large p-value in the naive analysis. We
+set `k=5` here for a first pass analysis, but some datasets may require
+larger values of `k`. An iterative strategy is recommended, including
+consideration of both postiive and negative control features.
+
+For details on the RUV-Seq method, see:
+
+<https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/>
 
 
 ```r
@@ -211,9 +241,8 @@ plotPCA(vsd, intgroup="W2")
 
 <img src="preNivolumabOnNivolumab_files/figure-html/pca3-2.png" width="672" />
 
-Adding the factors to the design, and performing a LRT. Here we use
-`glmGamPoi` which is an efficient method for estimating dispersion
-when we have many samples.
+Adding the factors to the design, and performing a LRT is fairly 
+simple, first we show this with DESeq2:
 
 
 ```r
@@ -281,13 +310,15 @@ system.time({
 ##  23.558   2.016  27.222
 ```
 
-Controlling for technical variation in this case reduces the number
-of DE genes. It could also be the opposite, that controlling for
+Controlling for technical variation in this case greatly reduces the number
+of DE genes. It could also be the opposite case, that controlling for
 technical variation increased the apparent number of DE genes.
+
 That the number is reduced here indicates that some of the previous
 results were likely due to confounding of technical variation with
 the condition variable. Ignoring that confounding, again, will result
-in invalid inference for all methods.
+in invalid inference for all methods that look for shifts in the 
+expression values.
 
 
 ```r
@@ -313,6 +344,12 @@ DESeq2::plotMA(res, ylim=c(-5,5))
 
 <img src="preNivolumabOnNivolumab_files/figure-html/maplot-1.png" width="672" />
 
+We repeat the analysis with the edgeR quasi-likelihood test. For
+details on this method see:
+
+* <https://f1000research.com/articles/5-1438>
+* <http://www.statsci.org/smyth/pubs/QuasiSeqPreprint.pdf>
+
 
 ```r
 y <- calcNormFactors(y)
@@ -321,6 +358,8 @@ y <- estimateDisp(y, design)
 qlfit <- glmQLFit(y, design)
 qlft <- glmQLFTest(qlfit)
 ```
+
+edgeR when controlling for the technical variation, has no DE genes:
 
 
 ```r
@@ -332,6 +371,10 @@ sum(tt$FDR < .1)
 ## [1] 0
 ```
 
+Where do the DESeq2 significant genes fall in terms of test statistic
+according to edgeR? This is mostly a check to make sure we can line
+up the two tables, etc.
+
 
 ```r
 hist(tt$F, freq=FALSE)
@@ -341,6 +384,11 @@ lines(density(F[!is.na(F)]))
 
 <img src="preNivolumabOnNivolumab_files/figure-html/edgerDESeq2Compare-1.png" width="672" />
 
+The order of the DESeq2 significant genes according to edgeR.
+We can see they are all top ranked, so the methods agree in general
+on the ranking of the top 20 genes, but DESeq2 is giving these
+genes a lower p-value:
+
 
 ```r
 match(rownames(res_sig), rownames(tt))
@@ -349,6 +397,9 @@ match(rownames(res_sig), rownames(tt))
 ```
 ##  [1]  8 12  7  3  2 15 14 13  4  1 11 18  6 19  5 16  9 21 17
 ```
+
+Another way to show that the methods are in agreement on the
+top genes:
 
 
 ```r
@@ -374,6 +425,15 @@ abline(0,1,col="red")
 ```
 
 <img src="preNivolumabOnNivolumab_files/figure-html/edgerDESeq2pvalues-1.png" width="672" />
+
+For more details on controlling for technical variation in RNA-seq
+experiments, see the following papers:
+
+* RUVSeq - <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4404308/>
+* svaseq - <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4245966/>
+* PEER - <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3398141/>
+* 't Hoen (2013) - <https://pubmed.ncbi.nlm.nih.gov/24037425/>
+* SEQC collection - <https://www.nature.com/collections/wzcnyyrcsd>
 
 # Session info
 
