@@ -6,6 +6,8 @@ output:
     self_contained: no
 ---
 
+# EDA, QC, and DESeq2 / edgeR analysis of 109 RNA-seq samples of immunotherapy treatment
+
 
 ```r
 x <- read.csv("GSE91061_BMS038109Sample.hg19KnownGene.raw.csv.gz", row.names=1)
@@ -306,7 +308,7 @@ res_sig <- res[which(res$padj < .1),]
 
 
 ```r
-plotMA(res, ylim=c(-5,5))
+DESeq2::plotMA(res, ylim=c(-5,5))
 ```
 
 <img src="preNivolumabOnNivolumab_files/figure-html/maplot-1.png" width="672" />
@@ -358,6 +360,22 @@ table(rownames(res_sig) %in% head(rownames(tt), 20))
 ## FALSE  TRUE 
 ##     1    18
 ```
+
+We can see that DESeq2 tends to have smaller p-values on this dataset
+but the two methods agree on the ranking:
+
+
+```r
+res_top500 <- res[head(order(res$pvalue),500),]
+plot(-log10(tt[rownames(res_top500),"PValue"]), 
+     -log10(res_top500$pvalue), log="xy",
+     xlab="edgeR pvalue", ylab="DESeq2 pvalue")
+abline(0,1,col="red")
+```
+
+<img src="preNivolumabOnNivolumab_files/figure-html/edgerDESeq2pvalues-1.png" width="672" />
+
+# Session info
 
 
 ```r

@@ -170,6 +170,8 @@ pre code {
 </div>
 
 
+<div id="eda-qc-and-deseq2-edger-analysis-of-109-rna-seq-samples-of-immunotherapy-treatment" class="section level1">
+<h1>EDA, QC, and DESeq2 / edgeR analysis of 109 RNA-seq samples of immunotherapy treatment</h1>
 <pre class="r"><code>x &lt;- read.csv(&quot;GSE91061_BMS038109Sample.hg19KnownGene.raw.csv.gz&quot;, row.names=1)
 condition &lt;- factor(sub(&quot;.+_(.+)_.+&quot;, &quot;\\1&quot;, colnames(x)))
 table(condition)</code></pre>
@@ -280,7 +282,7 @@ table(res$padj &lt; .1)</code></pre>
 ## FALSE  TRUE 
 ## 16212    19</code></pre>
 <pre class="r"><code>res_sig &lt;- res[which(res$padj &lt; .1),]</code></pre>
-<pre class="r"><code>plotMA(res, ylim=c(-5,5))</code></pre>
+<pre class="r"><code>DESeq2::plotMA(res, ylim=c(-5,5))</code></pre>
 <p><img src="preNivolumabOnNivolumab_files/figure-html/maplot-1.png" width="672" /></p>
 <pre class="r"><code>y &lt;- calcNormFactors(y)
 design &lt;- model.matrix(~W_1 + W_2 + W_3 + W_4 + W_5 + condition, data=pdat)
@@ -300,6 +302,16 @@ lines(density(F[!is.na(F)]))</code></pre>
 <pre><code>## 
 ## FALSE  TRUE 
 ##     1    18</code></pre>
+<p>We can see that DESeq2 tends to have smaller p-values on this dataset but the two methods agree on the ranking:</p>
+<pre class="r"><code>res_top500 &lt;- res[head(order(res$pvalue),500),]
+plot(-log10(tt[rownames(res_top500),&quot;PValue&quot;]), 
+     -log10(res_top500$pvalue), log=&quot;xy&quot;,
+     xlab=&quot;edgeR pvalue&quot;, ylab=&quot;DESeq2 pvalue&quot;)
+abline(0,1,col=&quot;red&quot;)</code></pre>
+<p><img src="preNivolumabOnNivolumab_files/figure-html/edgerDESeq2pvalues-1.png" width="672" /></p>
+</div>
+<div id="session-info" class="section level1">
+<h1>Session info</h1>
 <pre class="r"><code>sessionInfo()</code></pre>
 <pre><code>## R version 4.1.2 (2021-11-01)
 ## Platform: x86_64-apple-darwin17.0 (64-bit)
@@ -362,6 +374,7 @@ lines(density(F[!is.na(F)]))</code></pre>
 ## [103] grid_4.1.2                blob_1.2.2                callr_3.7.0              
 ## [106] digest_0.6.29             xtable_1.8-4              R.utils_2.11.0           
 ## [109] munsell_0.5.0             bslib_0.3.1               sessioninfo_1.2.2</code></pre>
+</div>
 
 
 
